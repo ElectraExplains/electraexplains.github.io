@@ -146,7 +146,7 @@ footer{text-align:center;color:#75839d;font-size:.76rem;margin-top:17px}
   let callerCooldownUntil = 0, callerCooldownTimer = null;
   const ignoredCallerIds = new Set();
   let timerStarted = 0, timerHandle = null, connected = false, muted = false, deafened = false;
-  let callerWakeLock = null;
+  let callerWakeLock = null, callerWakeLockWanted = false, callerWakeLockPending = false;
   const show = id => $(id).classList.remove('hidden');
   const hide = id => $(id).classList.add('hidden');
   const setText = (id, value) => { $(id).textContent = value; };
@@ -369,10 +369,16 @@ footer{text-align:center;color:#75839d;font-size:.76rem;margin-top:17px}
     audio.muted = false; audio.volume = 1;
   }
   async function requestCallerWakeLock() {
-    if (!hostIdFromLink || !navigator.wakeLock || document.visibilityState !== 'visible') return;
+    if (!hostIdFromLink || !callerWakeLockWanted || !navigator.wakeLock ||
+        document.visibilityState !== 'visible' || callerWakeLockPending) return;
     if (callerWakeLock && !callerWakeLock.released) return;
+    callerWakeLockPending = true;
     try {
       const lock = await navigator.wakeLock.request('screen');
+      if (!callerWakeLockWanted || callerEnding) {
+        await lock.release();
+        return;
+      }
       callerWakeLock = lock;
       lock.addEventListener('release', () => {
         if (callerWakeLock === lock) callerWakeLock = null;
@@ -380,9 +386,12 @@ footer{text-align:center;color:#75839d;font-size:.76rem;margin-top:17px}
       diag('CALLER_WAKE_LOCK_ACQUIRED');
     } catch (error) {
       diag('CALLER_WAKE_LOCK_UNAVAILABLE', { name: error.name, message: error.message });
+    } finally {
+      callerWakeLockPending = false;
     }
   }
   function releaseCallerWakeLock() {
+    callerWakeLockWanted = false;
     const lock = callerWakeLock;
     callerWakeLock = null;
     if (lock) lock.release().catch(() => {});
@@ -587,7 +596,7 @@ footer{text-align:center;color:#75839d;font-size:.76rem;margin-top:17px}
     hide('home'); show('caller');
     bindVolume('callerVolume','callerRemoteAudio','callerVolumeValue');
     document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible' && localStream && !callerEnding) {
+      if (document.visibilityState === 'visible' && localStream && callerWakeLockWanted && !callerEnding) {
         requestCallerWakeLock();
       }
     });
@@ -599,6 +608,7 @@ footer{text-align:center;color:#75839d;font-size:.76rem;margin-top:17px}
       // immediate End tap can invalidate nothing, and the delayed audio-resume
       // continuation below can accidentally launch a fresh call afterwards.
       const attemptId = ++callerAttemptId;
+      callerWakeLockWanted = true;
       requestCallerWakeLock();
       diag('CALL_NOW_CLICK', { attemptId, peerId: peer?.id || null });
       const isCurrentAttempt = () => attemptId === callerAttemptId;
