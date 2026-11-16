@@ -139,6 +139,7 @@ footer{text-align:center;color:#75839d;font-size:.76rem;margin-top:17px}
   }
   let peer = null, incomingCall = null, activeCall = null, secondCall = null, waitingCall = null, localStream = null, callerSignal = null, pendingCallerId = null, pendingSignalConn = null, waitingCallerId = null, waitingSignalConn = null;
   const activeSignalConns = new Map();
+  const callerAudioStates = new Map();
   let conferenceMixer = null;
   let callerFinalStatus = null, waitingForSignalAck = false, callerAttemptId = 0, callerEnding = false;
   // Mobile browsers can deliver a second tap after the End button has been
@@ -355,6 +356,10 @@ footer{text-align:center;color:#75839d;font-size:.76rem;margin-top:17px}
     const id = hostIdFromLink ? 'callerDeafenBtn' : 'hostDeafenBtn';
     setText(id, value ? '🔇 Undeafen' : '🔊 Deafen');
     $(id).classList.toggle('active', value);
+  }
+  function sendCallerAudioState() {
+    if (!hostIdFromLink || !callerSignal || !callerSignal.open) return;
+    try { callerSignal.send({ type: 'CALLER_AUDIO_STATE', muted, deafened }); } catch {}
   }
   function bindVolume(inputId, audioId, labelId) {
     $(inputId).addEventListener('input', () => {
@@ -600,8 +605,8 @@ footer{text-align:center;color:#75839d;font-size:.76rem;margin-top:17px}
         requestCallerWakeLock();
       }
     });
-    $('callerMuteBtn').addEventListener('click', () => setMicMuted(!muted));
-    $('callerDeafenBtn').addEventListener('click', () => setDeafened(!deafened));
+    $('callerMuteBtn').addEventListener('click', () => { setMicMuted(!muted); sendCallerAudioState(); });
+    $('callerDeafenBtn').addEventListener('click', () => { setDeafened(!deafened); sendCallerAudioState(); });
     $('callBtn').addEventListener('click', async () => {
       if (callerEnding || Date.now() < callerCooldownUntil || $('callBtn').disabled) return;
       // Claim this attempt synchronously, before the first await. Otherwise an
@@ -901,6 +906,18 @@ footer{text-align:center;color:#75839d;font-size:.76rem;margin-top:17px}
               $('acceptBtn').disabled = false;
               setText('hostStatus','Incoming call — accept or reject.');
             }
+          } else if (message.type === 'CALLER_AUDIO_STATE') {
+            // Only surface controls changed by a caller who is currently on air.
+            if (activeCall?.peer !== conn.peer && secondCall?.peer !== conn.peer) return;
+            const previous = callerAudioStates.get(conn.peer) || { muted: false, deafened: false };
+            const next = { muted: message.muted === true, deafened: message.deafened === true };
+            if (next.muted !== previous.muted) {
+              showHostNotice(next.muted ? '🔇 Caller muted their microphone.' : '🎙 Caller unmuted their microphone.', 3500);
+            }
+            if (next.deafened !== previous.deafened) {
+              showHostNotice(next.deafened ? '🔕 Caller turned their speaker off.' : '🔊 Caller turned their speaker on.', 3500);
+            }
+            callerAudioStates.set(conn.peer, next);
           } else if (message.type === 'CANCEL') {
             // Handle cancellation even if CALL_REQUEST/media signaling is still
             // arriving. Always acknowledge this caller's own signal connection.
