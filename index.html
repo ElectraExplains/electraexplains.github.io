@@ -146,6 +146,7 @@ footer{text-align:center;color:#75839d;font-size:.76rem;margin-top:17px}
   let callerCooldownUntil = 0, callerCooldownTimer = null;
   const ignoredCallerIds = new Set();
   let timerStarted = 0, timerHandle = null, connected = false, muted = false, deafened = false;
+  let callerWakeLock = null;
   const show = id => $(id).classList.remove('hidden');
   const hide = id => $(id).classList.add('hidden');
   const setText = (id, value) => { $(id).textContent = value; };
@@ -367,7 +368,27 @@ footer{text-align:center;color:#75839d;font-size:.76rem;margin-top:17px}
     const audio = $(hostIdFromLink ? 'callerRemoteAudio' : 'remoteAudio');
     audio.muted = false; audio.volume = 1;
   }
+  async function requestCallerWakeLock() {
+    if (!hostIdFromLink || !navigator.wakeLock || document.visibilityState !== 'visible') return;
+    if (callerWakeLock && !callerWakeLock.released) return;
+    try {
+      const lock = await navigator.wakeLock.request('screen');
+      callerWakeLock = lock;
+      lock.addEventListener('release', () => {
+        if (callerWakeLock === lock) callerWakeLock = null;
+      }, { once: true });
+      diag('CALLER_WAKE_LOCK_ACQUIRED');
+    } catch (error) {
+      diag('CALLER_WAKE_LOCK_UNAVAILABLE', { name: error.name, message: error.message });
+    }
+  }
+  function releaseCallerWakeLock() {
+    const lock = callerWakeLock;
+    callerWakeLock = null;
+    if (lock) lock.release().catch(() => {});
+  }
   function stopLocalStream() {
+    if (hostIdFromLink) releaseCallerWakeLock();
     if (localStream) localStream.getTracks().forEach(track => track.stop());
     localStream = null;
   }
@@ -565,6 +586,11 @@ footer{text-align:center;color:#75839d;font-size:.76rem;margin-top:17px}
   if (hostIdFromLink) {
     hide('home'); show('caller');
     bindVolume('callerVolume','callerRemoteAudio','callerVolumeValue');
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible' && localStream && !callerEnding) {
+        requestCallerWakeLock();
+      }
+    });
     $('callerMuteBtn').addEventListener('click', () => setMicMuted(!muted));
     $('callerDeafenBtn').addEventListener('click', () => setDeafened(!deafened));
     $('callBtn').addEventListener('click', async () => {
@@ -573,6 +599,7 @@ footer{text-align:center;color:#75839d;font-size:.76rem;margin-top:17px}
       // immediate End tap can invalidate nothing, and the delayed audio-resume
       // continuation below can accidentally launch a fresh call afterwards.
       const attemptId = ++callerAttemptId;
+      requestCallerWakeLock();
       diag('CALL_NOW_CLICK', { attemptId, peerId: peer?.id || null });
       const isCurrentAttempt = () => attemptId === callerAttemptId;
       const CallerAudioContext = window.AudioContext || window.webkitAudioContext;
