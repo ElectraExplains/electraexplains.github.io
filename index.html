@@ -475,8 +475,8 @@ footer{text-align:center;color:#75839d;font-size:.76rem;margin-top:17px}
     }
     if (call && secondCall === call) {
       callerAudioStates.delete(call.peer);
-      renderCallerAudioStatus();
       secondCall = null;
+      renderCallerAudioStatus();
       if (conferenceMixer) conferenceMixer.removeParticipant('caller-2');
       $('remoteAudio2').srcObject = null;
       hide('conferenceControls'); hide('secondIncoming');
